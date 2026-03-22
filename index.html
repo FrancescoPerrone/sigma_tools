@@ -9,8 +9,8 @@
   <title>Scanner</title>
   <link rel="manifest" href="#" />
 
-  <!-- ZXing for QR/barcode via camera -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/zxing-js/0.20.0/index.min.js"></script>
+  <!-- jsQR: reliable QR decoder for Safari iOS -->
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
 
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;600;700&display=swap');
@@ -697,7 +697,6 @@
 <script>
 // ─── STATE ────────────────────────────────────────────────
 let qrScanning = false;
-let qrReader = null;
 let nfcReading = false;
 let nfcAbort = null;
 let lastQR = null;
@@ -724,89 +723,113 @@ function switchTab(name) {
 }
 
 // ─── QR ───────────────────────────────────────────────────
+let scanCanvas = null;
+let scanCtx = null;
+let scanRAF = null;
+let lastScanValue = null;
+
 async function toggleQR() {
-  if (qrScanning) {
-    stopQR(); return;
-  }
+  if (qrScanning) { stopQR(); return; }
+  const btn = document.getElementById('qr-start-btn');
+  btn.textContent = '⏳ AVVIO...';
   try {
-    const btn = document.getElementById('qr-start-btn');
-    btn.textContent = '⏳ AVVIO...';
+    // Richiedi risoluzione alta per leggere QR su schermo
     const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'environment' }
+      video: {
+        facingMode: { ideal: 'environment' },
+        width:  { ideal: 1920 },
+        height: { ideal: 1080 },
+        focusMode: { ideal: 'continuous' }
+      }
     });
     const video = document.getElementById('qr-video');
     video.srcObject = stream;
+    video.setAttribute('playsinline', true);
     await video.play();
 
-    // Try ZXing
-    if (typeof ZXing !== 'undefined') {
-      const hints = new Map();
-      const formats = [
-        ZXing.BarcodeFormat.QR_CODE,
-        ZXing.BarcodeFormat.DATA_MATRIX,
-        ZXing.BarcodeFormat.EAN_13,
-        ZXing.BarcodeFormat.CODE_128,
-        ZXing.BarcodeFormat.CODE_39,
-      ];
-      hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
-      qrReader = new ZXing.BrowserMultiFormatReader(hints);
-      qrReader.decodeFromStream(stream, video, (result, err) => {
-        if (result) onQRResult(result.getText());
-      });
-    } else {
-      // fallback: canvas polling
-      scanLoop();
-    }
+    // Canvas riutilizzabile
+    scanCanvas = document.createElement('canvas');
+    scanCtx = scanCanvas.getContext('2d', { willReadFrequently: true });
 
     qrScanning = true;
     btn.textContent = '⏹ STOP';
     btn.classList.add('stop');
-    addLog('qr', 'inf', 'Camera attivata');
+    addLog('qr', 'inf', 'Camera attivata — motore: jsQR');
+    scanLoop();
   } catch(e) {
+    btn.textContent = '▶ AVVIA SCANSIONE QR';
     addLog('qr', 'err', 'Errore camera: ' + e.message);
-    document.getElementById('qr-start-btn').textContent = '▶ AVVIA SCANSIONE QR';
   }
 }
 
 function stopQR() {
-  if (qrReader) { try { qrReader.reset(); } catch(e){} qrReader = null; }
+  qrScanning = false;
+  if (scanRAF) { cancelAnimationFrame(scanRAF); scanRAF = null; }
   const video = document.getElementById('qr-video');
   if (video.srcObject) {
     video.srcObject.getTracks().forEach(t => t.stop());
     video.srcObject = null;
   }
-  qrScanning = false;
   const btn = document.getElementById('qr-start-btn');
   btn.textContent = '▶ AVVIA SCANSIONE QR';
   btn.classList.remove('stop');
   addLog('qr', 'inf', 'Camera fermata');
 }
 
-// Canvas fallback scan loop
+// Scan loop: jsQR primario, BarcodeDetector come fallback
 let lastScan = 0;
 function scanLoop() {
   if (!qrScanning) return;
-  const video = document.getElementById('qr-video');
+  scanRAF = requestAnimationFrame(scanLoop);
+
   const now = Date.now();
-  if (now - lastScan > 500 && video.readyState === video.HAVE_ENOUGH_DATA) {
-    lastScan = now;
-    const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    canvas.getContext('2d').drawImage(video, 0, 0);
-    // BarcodeDetector (Chrome/Safari 17+)
-    if ('BarcodeDetector' in window) {
-      new BarcodeDetector({ formats: ['qr_code', 'ean_13', 'code_128', 'code_39', 'data_matrix'] })
-        .detect(canvas)
-        .then(codes => { if (codes.length) onQRResult(codes[0].rawValue); })
-        .catch(() => {});
+  if (now - lastScan < 150) return; // ~6fps decode, abbastanza per QR
+  lastScan = now;
+
+  const video = document.getElementById('qr-video');
+  if (video.readyState !== video.HAVE_ENOUGH_DATA) return;
+
+  const W = video.videoWidth;
+  const H = video.videoHeight;
+  if (!W || !H) return;
+
+  scanCanvas.width  = W;
+  scanCanvas.height = H;
+  scanCtx.drawImage(video, 0, 0, W, H);
+
+  // ── ENGINE 1: jsQR (sincrono, ottimo su Safari) ──────────
+  if (typeof jsQR !== 'undefined') {
+    const imageData = scanCtx.getImageData(0, 0, W, H);
+    const code = jsQR(imageData.data, W, H, {
+      inversionAttempts: 'dontInvert'
+    });
+    if (code && code.data && code.data !== lastScanValue) {
+      onQRResult(code.data);
+      return;
     }
   }
-  requestAnimationFrame(scanLoop);
+
+  // ── ENGINE 2: BarcodeDetector nativo (Safari 17+) ────────
+  if ('BarcodeDetector' in window) {
+    BarcodeDetector.getSupportedFormats().then(fmts => {
+      const detector = new BarcodeDetector({ formats: fmts });
+      detector.detect(scanCanvas).then(codes => {
+        if (codes.length && codes[0].rawValue !== lastScanValue) {
+          onQRResult(codes[0].rawValue);
+        }
+      }).catch(() => {});
+    }).catch(() => {
+      const detector = new BarcodeDetector({ formats: ['qr_code'] });
+      detector.detect(scanCanvas).then(codes => {
+        if (codes.length) onQRResult(codes[0].rawValue);
+      }).catch(() => {});
+    });
+  }
 }
 
 function onQRResult(text) {
-  if (lastQR === text) return;
+  if (lastScanValue === text) return;
+  lastScanValue = text;
   lastQR = text;
   document.getElementById('qr-result').textContent = text;
   document.getElementById('qr-result').classList.remove('empty');
