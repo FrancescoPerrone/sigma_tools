@@ -1,0 +1,1015 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Scanner" />
+  <title>Scanner</title>
+  <link rel="manifest" href="#" />
+
+  <!-- ZXing for QR/barcode via camera -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/zxing-js/0.20.0/index.min.js"></script>
+
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;600;700&display=swap');
+
+    :root {
+      --bg: #0a0c0f;
+      --panel: #111418;
+      --border: #1e2530;
+      --accent: #00e5ff;
+      --accent2: #ff6b35;
+      --success: #00ff88;
+      --warn: #ffcc00;
+      --danger: #ff3b5c;
+      --text: #c8d8e8;
+      --dim: #4a5a6a;
+      --mono: 'Share Tech Mono', monospace;
+      --sans: 'Rajdhani', sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      overflow: hidden;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+    }
+
+    /* GRID BACKGROUND */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(0,229,255,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,229,255,0.03) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    #app {
+      position: relative;
+      z-index: 1;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      padding: env(safe-area-inset-top, 12px) 0 env(safe-area-inset-bottom, 12px);
+    }
+
+    /* HEADER */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 20px 10px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .logo {
+      font-family: var(--mono);
+      font-size: 18px;
+      color: var(--accent);
+      letter-spacing: 3px;
+      text-transform: uppercase;
+    }
+
+    .logo span {
+      color: var(--accent2);
+    }
+
+    .status-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--success);
+      box-shadow: 0 0 8px var(--success);
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+
+    /* TABS */
+    .tabs {
+      display: flex;
+      gap: 2px;
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .tab {
+      flex: 1;
+      padding: 8px 4px;
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--dim);
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 1px;
+      cursor: pointer;
+      transition: all 0.15s;
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .tab .tab-icon { font-size: 16px; }
+
+    .tab.active {
+      background: rgba(0,229,255,0.08);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    /* CONTENT */
+    .content {
+      flex: 1;
+      overflow-y: auto;
+      overflow-x: hidden;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .panel {
+      display: none;
+      padding: 16px;
+      height: 100%;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .panel.active {
+      display: flex;
+    }
+
+    /* QR PANEL */
+    #qr-video-wrap {
+      position: relative;
+      border-radius: 8px;
+      overflow: hidden;
+      background: #000;
+      border: 1px solid var(--border);
+      aspect-ratio: 1;
+      max-height: 280px;
+      align-self: center;
+      width: 100%;
+    }
+
+    #qr-video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .scan-overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+    }
+
+    .scan-frame {
+      width: 60%;
+      aspect-ratio: 1;
+      position: relative;
+    }
+
+    .scan-frame::before, .scan-frame::after,
+    .scan-frame .c3, .scan-frame .c4 {
+      content: '';
+      position: absolute;
+      width: 20px; height: 20px;
+      border-color: var(--accent);
+      border-style: solid;
+    }
+
+    .scan-frame::before { top: 0; left: 0; border-width: 2px 0 0 2px; }
+    .scan-frame::after  { top: 0; right: 0; border-width: 2px 2px 0 0; }
+    .scan-frame .c3     { bottom: 0; left: 0; border-width: 0 0 2px 2px; }
+    .scan-frame .c4     { bottom: 0; right: 0; border-width: 0 2px 2px 0; }
+
+    .scan-line {
+      position: absolute;
+      left: 10%; right: 10%;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+      animation: scan 2s linear infinite;
+      top: 10%;
+    }
+
+    @keyframes scan {
+      0%   { top: 10%; opacity: 1; }
+      90%  { top: 90%; opacity: 1; }
+      100% { top: 10%; opacity: 0; }
+    }
+
+    #qr-start-btn {
+      background: rgba(0,229,255,0.1);
+      border: 1px solid var(--accent);
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 14px;
+      letter-spacing: 2px;
+      padding: 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      width: 100%;
+      transition: all 0.15s;
+    }
+
+    #qr-start-btn:active {
+      background: rgba(0,229,255,0.2);
+    }
+
+    #qr-start-btn.stop {
+      border-color: var(--danger);
+      color: var(--danger);
+      background: rgba(255,59,92,0.1);
+    }
+
+    /* NFC PANEL */
+    .nfc-ring-wrap {
+      display: flex;
+      justify-content: center;
+      padding: 10px 0;
+    }
+
+    .nfc-ring {
+      width: 120px; height: 120px;
+      border-radius: 50%;
+      border: 2px solid var(--border);
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 40px;
+    }
+
+    .nfc-ring.scanning {
+      border-color: var(--accent);
+      animation: ring-pulse 1.5s ease-in-out infinite;
+    }
+
+    .nfc-ring.scanning::before {
+      content: '';
+      position: absolute;
+      inset: -10px;
+      border-radius: 50%;
+      border: 1px solid var(--accent);
+      opacity: 0;
+      animation: ring-expand 1.5s ease-out infinite;
+    }
+
+    .nfc-ring.scanning::after {
+      content: '';
+      position: absolute;
+      inset: -22px;
+      border-radius: 50%;
+      border: 1px solid var(--accent);
+      opacity: 0;
+      animation: ring-expand 1.5s ease-out 0.5s infinite;
+    }
+
+    @keyframes ring-pulse {
+      0%, 100% { box-shadow: 0 0 10px rgba(0,229,255,0.3); }
+      50% { box-shadow: 0 0 25px rgba(0,229,255,0.6); }
+    }
+
+    @keyframes ring-expand {
+      0% { transform: scale(1); opacity: 0.6; }
+      100% { transform: scale(1.3); opacity: 0; }
+    }
+
+    #nfc-start-btn {
+      background: rgba(0,229,255,0.1);
+      border: 1px solid var(--accent);
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 14px;
+      letter-spacing: 2px;
+      padding: 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      width: 100%;
+      transition: all 0.15s;
+    }
+
+    #nfc-start-btn.stop {
+      border-color: var(--danger);
+      color: var(--danger);
+      background: rgba(255,59,92,0.1);
+    }
+
+    #nfc-start-btn:active { opacity: 0.7; }
+
+    .nfc-note {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--dim);
+      text-align: center;
+      line-height: 1.5;
+    }
+
+    /* RESULT BOX */
+    .result-box {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 12px;
+      min-height: 60px;
+    }
+
+    .result-label {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--dim);
+      letter-spacing: 2px;
+      margin-bottom: 6px;
+    }
+
+    .result-value {
+      font-family: var(--mono);
+      font-size: 13px;
+      color: var(--success);
+      word-break: break-all;
+      line-height: 1.5;
+    }
+
+    .result-value.empty {
+      color: var(--dim);
+      font-style: italic;
+    }
+
+    /* SERVER CONFIG */
+    .config-row {
+      display: flex;
+      gap: 8px;
+      align-items: stretch;
+    }
+
+    .config-input {
+      flex: 1;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 12px;
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 12px;
+      outline: none;
+      -webkit-appearance: none;
+    }
+
+    .config-input:focus {
+      border-color: var(--accent);
+    }
+
+    .send-btn {
+      background: rgba(255,107,53,0.15);
+      border: 1px solid var(--accent2);
+      color: var(--accent2);
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 1px;
+      padding: 10px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.15s;
+    }
+
+    .send-btn:active { background: rgba(255,107,53,0.3); }
+    .send-btn:disabled { opacity: 0.3; cursor: default; }
+
+    /* LOG PANEL */
+    #log-panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px;
+      flex: 1;
+      overflow-y: auto;
+      min-height: 120px;
+      max-height: 200px;
+    }
+
+    .log-entry {
+      font-family: var(--mono);
+      font-size: 10px;
+      line-height: 1.6;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      padding: 3px 0;
+      display: flex;
+      gap: 8px;
+    }
+
+    .log-entry .ts { color: var(--dim); flex-shrink: 0; }
+    .log-entry.ok  .msg { color: var(--success); }
+    .log-entry.err .msg { color: var(--danger); }
+    .log-entry.inf .msg { color: var(--accent); }
+
+    .log-label {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--dim);
+      letter-spacing: 2px;
+      margin-bottom: 4px;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .clear-btn {
+      background: none;
+      border: none;
+      color: var(--dim);
+      font-family: var(--mono);
+      font-size: 10px;
+      cursor: pointer;
+      letter-spacing: 1px;
+    }
+
+    /* HISTORY PANEL */
+    .history-item {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 12px;
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+    }
+
+    .history-item .hi-type {
+      font-family: var(--mono);
+      font-size: 9px;
+      color: var(--accent2);
+      letter-spacing: 1px;
+      background: rgba(255,107,53,0.1);
+      border: 1px solid rgba(255,107,53,0.3);
+      border-radius: 3px;
+      padding: 2px 5px;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+
+    .history-item .hi-body { flex: 1; }
+    .history-item .hi-val {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--text);
+      word-break: break-all;
+    }
+
+    .history-item .hi-ts {
+      font-family: var(--mono);
+      font-size: 9px;
+      color: var(--dim);
+      margin-top: 3px;
+    }
+
+    .empty-state {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--dim);
+      text-align: center;
+      padding: 40px 0;
+    }
+
+    /* SERVER PANEL */
+    .server-section { display: flex; flex-direction: column; gap: 10px; }
+
+    .server-label {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--dim);
+      letter-spacing: 2px;
+      margin-bottom: 2px;
+    }
+
+    .server-input-full {
+      width: 100%;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 12px;
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 12px;
+      outline: none;
+      -webkit-appearance: none;
+    }
+
+    .server-input-full:focus { border-color: var(--accent); }
+
+    .method-row {
+      display: flex;
+      gap: 6px;
+    }
+
+    .method-btn {
+      flex: 1;
+      padding: 8px;
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--dim);
+      font-family: var(--mono);
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .method-btn.active {
+      border-color: var(--accent2);
+      color: var(--accent2);
+      background: rgba(255,107,53,0.1);
+    }
+
+    .test-btn {
+      width: 100%;
+      padding: 12px;
+      background: rgba(0,229,255,0.08);
+      border: 1px solid var(--accent);
+      border-radius: 6px;
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 13px;
+      letter-spacing: 2px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .test-btn:active { background: rgba(0,229,255,0.18); }
+
+    /* SCROLLBAR */
+    ::-webkit-scrollbar { width: 3px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  </style>
+</head>
+<body>
+<div id="app">
+
+  <header>
+    <div class="logo">SC<span>AN</span>NER</div>
+    <div style="font-family:var(--mono);font-size:10px;color:var(--dim);letter-spacing:1px;">v1.0 PWA</div>
+    <div class="status-dot"></div>
+  </header>
+
+  <div class="tabs">
+    <button class="tab active" onclick="switchTab('qr')">
+      <span class="tab-icon">⬛</span>QR
+    </button>
+    <button class="tab" onclick="switchTab('nfc')">
+      <span class="tab-icon">📡</span>NFC
+    </button>
+    <button class="tab" onclick="switchTab('history')">
+      <span class="tab-icon">📋</span>LOG
+    </button>
+    <button class="tab" onclick="switchTab('server')">
+      <span class="tab-icon">⚡</span>SERVER
+    </button>
+  </div>
+
+  <div class="content">
+
+    <!-- QR PANEL -->
+    <div id="tab-qr" class="panel active">
+      <div id="qr-video-wrap">
+        <video id="qr-video" playsinline muted autoplay></video>
+        <div class="scan-overlay">
+          <div class="scan-frame">
+            <div class="c3"></div><div class="c4"></div>
+            <div class="scan-line"></div>
+          </div>
+        </div>
+      </div>
+
+      <button id="qr-start-btn" onclick="toggleQR()">▶ AVVIA SCANSIONE QR</button>
+
+      <div class="result-box">
+        <div class="result-label">// RISULTATO</div>
+        <div id="qr-result" class="result-value empty">in attesa...</div>
+      </div>
+
+      <div class="config-row">
+        <button class="send-btn" id="qr-send-btn" onclick="sendResult('QR')" disabled>INVIA →</button>
+      </div>
+
+      <div class="log-label">
+        <span>// LOG</span>
+        <button class="clear-btn" onclick="clearLog()">CLEAR</button>
+      </div>
+      <div id="log-panel"></div>
+    </div>
+
+    <!-- NFC PANEL -->
+    <div id="tab-nfc" class="panel">
+      <div class="nfc-ring-wrap">
+        <div class="nfc-ring" id="nfc-ring">📡</div>
+      </div>
+
+      <button id="nfc-start-btn" onclick="toggleNFC()">▶ AVVIA LETTURA NFC</button>
+
+      <div class="nfc-note">
+        Richiede iPhone 7+ con iOS 14.5+<br/>
+        Supporta tag NFC NDEF (13.56 MHz)<br/>
+        ⚠️ RFID 125kHz solo con app nativa
+      </div>
+
+      <div class="result-box">
+        <div class="result-label">// RISULTATO NFC</div>
+        <div id="nfc-result" class="result-value empty">avvicina tag NFC...</div>
+      </div>
+
+      <div class="config-row">
+        <button class="send-btn" id="nfc-send-btn" onclick="sendResult('NFC')" disabled>INVIA →</button>
+      </div>
+
+      <div class="log-label">
+        <span>// LOG</span>
+        <button class="clear-btn" onclick="clearLog()">CLEAR</button>
+      </div>
+      <div id="log-panel-nfc"></div>
+    </div>
+
+    <!-- HISTORY PANEL -->
+    <div id="tab-history" class="panel">
+      <div class="log-label">
+        <span>// SCANSIONI RECENTI</span>
+        <button class="clear-btn" onclick="clearHistory()">CLEAR</button>
+      </div>
+      <div id="history-list" style="display:flex;flex-direction:column;gap:8px;flex:1;overflow-y:auto;"></div>
+    </div>
+
+    <!-- SERVER PANEL -->
+    <div id="tab-server" class="panel">
+      <div class="server-section">
+        <div>
+          <div class="server-label">// ENDPOINT URL</div>
+          <input type="url" id="server-url" class="server-input-full"
+            placeholder="https://yourserver.com/scan"
+            oninput="saveServerConfig()" />
+        </div>
+
+        <div>
+          <div class="server-label">// METODO</div>
+          <div class="method-row">
+            <button class="method-btn active" id="method-POST" onclick="setMethod('POST')">POST</button>
+            <button class="method-btn" id="method-GET" onclick="setMethod('GET')">GET</button>
+          </div>
+        </div>
+
+        <div>
+          <div class="server-label">// HEADER AUTH (opzionale)</div>
+          <input type="text" id="server-auth" class="server-input-full"
+            placeholder="Bearer TOKEN"
+            oninput="saveServerConfig()" />
+        </div>
+
+        <button class="test-btn" onclick="testServer()">⚡ TEST CONNESSIONE</button>
+
+        <div class="result-box">
+          <div class="result-label">// RISPOSTA SERVER</div>
+          <div id="server-response" class="result-value empty">—</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// ─── STATE ────────────────────────────────────────────────
+let qrScanning = false;
+let qrReader = null;
+let nfcReading = false;
+let nfcAbort = null;
+let lastQR = null;
+let lastNFC = null;
+let history = JSON.parse(localStorage.getItem('scan_history') || '[]');
+let serverConfig = JSON.parse(localStorage.getItem('server_config') || '{"url":"","method":"POST","auth":""}');
+
+// ─── INIT ─────────────────────────────────────────────────
+window.onload = () => {
+  document.getElementById('server-url').value = serverConfig.url || '';
+  document.getElementById('server-auth').value = serverConfig.auth || '';
+  setMethod(serverConfig.method || 'POST');
+  renderHistory();
+};
+
+// ─── TABS ─────────────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach((t,i) => {
+    t.classList.toggle('active', ['qr','nfc','history','server'][i] === name);
+  });
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  if (name === 'history') renderHistory();
+}
+
+// ─── QR ───────────────────────────────────────────────────
+async function toggleQR() {
+  if (qrScanning) {
+    stopQR(); return;
+  }
+  try {
+    const btn = document.getElementById('qr-start-btn');
+    btn.textContent = '⏳ AVVIO...';
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment' }
+    });
+    const video = document.getElementById('qr-video');
+    video.srcObject = stream;
+    await video.play();
+
+    // Try ZXing
+    if (typeof ZXing !== 'undefined') {
+      const hints = new Map();
+      const formats = [
+        ZXing.BarcodeFormat.QR_CODE,
+        ZXing.BarcodeFormat.DATA_MATRIX,
+        ZXing.BarcodeFormat.EAN_13,
+        ZXing.BarcodeFormat.CODE_128,
+        ZXing.BarcodeFormat.CODE_39,
+      ];
+      hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
+      qrReader = new ZXing.BrowserMultiFormatReader(hints);
+      qrReader.decodeFromStream(stream, video, (result, err) => {
+        if (result) onQRResult(result.getText());
+      });
+    } else {
+      // fallback: canvas polling
+      scanLoop();
+    }
+
+    qrScanning = true;
+    btn.textContent = '⏹ STOP';
+    btn.classList.add('stop');
+    addLog('qr', 'inf', 'Camera attivata');
+  } catch(e) {
+    addLog('qr', 'err', 'Errore camera: ' + e.message);
+    document.getElementById('qr-start-btn').textContent = '▶ AVVIA SCANSIONE QR';
+  }
+}
+
+function stopQR() {
+  if (qrReader) { try { qrReader.reset(); } catch(e){} qrReader = null; }
+  const video = document.getElementById('qr-video');
+  if (video.srcObject) {
+    video.srcObject.getTracks().forEach(t => t.stop());
+    video.srcObject = null;
+  }
+  qrScanning = false;
+  const btn = document.getElementById('qr-start-btn');
+  btn.textContent = '▶ AVVIA SCANSIONE QR';
+  btn.classList.remove('stop');
+  addLog('qr', 'inf', 'Camera fermata');
+}
+
+// Canvas fallback scan loop
+let lastScan = 0;
+function scanLoop() {
+  if (!qrScanning) return;
+  const video = document.getElementById('qr-video');
+  const now = Date.now();
+  if (now - lastScan > 500 && video.readyState === video.HAVE_ENOUGH_DATA) {
+    lastScan = now;
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext('2d').drawImage(video, 0, 0);
+    // BarcodeDetector (Chrome/Safari 17+)
+    if ('BarcodeDetector' in window) {
+      new BarcodeDetector({ formats: ['qr_code', 'ean_13', 'code_128', 'code_39', 'data_matrix'] })
+        .detect(canvas)
+        .then(codes => { if (codes.length) onQRResult(codes[0].rawValue); })
+        .catch(() => {});
+    }
+  }
+  requestAnimationFrame(scanLoop);
+}
+
+function onQRResult(text) {
+  if (lastQR === text) return;
+  lastQR = text;
+  document.getElementById('qr-result').textContent = text;
+  document.getElementById('qr-result').classList.remove('empty');
+  document.getElementById('qr-send-btn').disabled = false;
+  addLog('qr', 'ok', 'QR: ' + text.substring(0,40));
+  addToHistory('QR', text);
+  vibrate();
+}
+
+// ─── NFC ──────────────────────────────────────────────────
+async function toggleNFC() {
+  if (nfcReading) {
+    stopNFC(); return;
+  }
+  if (!('NDEFReader' in window)) {
+    addLog('nfc', 'err', 'NFC non supportato (iOS 14.5+ richiesto)');
+    document.getElementById('nfc-result').textContent = 'NFC non supportato su questo dispositivo/browser';
+    document.getElementById('nfc-result').classList.remove('empty');
+    return;
+  }
+  try {
+    const ndef = new NDEFReader();
+    nfcAbort = new AbortController();
+    await ndef.scan({ signal: nfcAbort.signal });
+
+    ndef.addEventListener('reading', ({ message, serialNumber }) => {
+      let content = serialNumber || '';
+      if (message.records.length > 0) {
+        const rec = message.records[0];
+        if (rec.recordType === 'text') {
+          const decoder = new TextDecoder(rec.encoding || 'utf-8');
+          content = decoder.decode(rec.data);
+        } else if (rec.recordType === 'url') {
+          const decoder = new TextDecoder();
+          content = decoder.decode(rec.data);
+        } else {
+          content = 'UID: ' + serialNumber + ' | Type: ' + rec.recordType;
+        }
+      } else {
+        content = 'UID: ' + serialNumber;
+      }
+      onNFCResult(content);
+    });
+
+    ndef.addEventListener('readingerror', () => {
+      addLog('nfc', 'err', 'Errore lettura tag');
+    });
+
+    nfcReading = true;
+    document.getElementById('nfc-ring').classList.add('scanning');
+    const btn = document.getElementById('nfc-start-btn');
+    btn.textContent = '⏹ STOP';
+    btn.classList.add('stop');
+    addLog('nfc', 'inf', 'NFC attivato — avvicina tag');
+  } catch(e) {
+    addLog('nfc', 'err', 'NFC errore: ' + e.message);
+  }
+}
+
+function stopNFC() {
+  if (nfcAbort) { nfcAbort.abort(); nfcAbort = null; }
+  nfcReading = false;
+  document.getElementById('nfc-ring').classList.remove('scanning');
+  const btn = document.getElementById('nfc-start-btn');
+  btn.textContent = '▶ AVVIA LETTURA NFC';
+  btn.classList.remove('stop');
+  addLog('nfc', 'inf', 'NFC fermato');
+}
+
+function onNFCResult(text) {
+  lastNFC = text;
+  document.getElementById('nfc-result').textContent = text;
+  document.getElementById('nfc-result').classList.remove('empty');
+  document.getElementById('nfc-send-btn').disabled = false;
+  addLog('nfc', 'ok', 'NFC: ' + text.substring(0,40));
+  addToHistory('NFC', text);
+  vibrate();
+}
+
+// ─── SEND TO SERVER ───────────────────────────────────────
+async function sendResult(type) {
+  const url = serverConfig.url;
+  if (!url) {
+    alert('Configura prima il server nel tab SERVER');
+    return;
+  }
+  const value = type === 'QR' ? lastQR : lastNFC;
+  const payload = {
+    type,
+    value,
+    timestamp: new Date().toISOString(),
+    device: navigator.userAgent.match(/iPhone|iPad/) ? 'iOS' : 'other'
+  };
+
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (serverConfig.auth) headers['Authorization'] = serverConfig.auth;
+
+    const opts = { method: serverConfig.method, headers };
+    let fetchUrl = url;
+    if (serverConfig.method === 'GET') {
+      fetchUrl += '?type=' + encodeURIComponent(type) + '&value=' + encodeURIComponent(value);
+    } else {
+      opts.body = JSON.stringify(payload);
+    }
+
+    addLog('qr', 'inf', 'Invio a ' + url.substring(0,30));
+    const res = await fetch(fetchUrl, opts);
+    const text = await res.text();
+    addLog('qr', res.ok ? 'ok' : 'err', 'Risposta ' + res.status + ': ' + text.substring(0,40));
+    document.getElementById('server-response').textContent = res.status + ' ' + text.substring(0, 120);
+    document.getElementById('server-response').classList.remove('empty');
+  } catch(e) {
+    addLog('qr', 'err', 'Errore invio: ' + e.message);
+  }
+}
+
+// ─── SERVER CONFIG ────────────────────────────────────────
+function saveServerConfig() {
+  serverConfig.url = document.getElementById('server-url').value;
+  serverConfig.auth = document.getElementById('server-auth').value;
+  localStorage.setItem('server_config', JSON.stringify(serverConfig));
+}
+
+function setMethod(m) {
+  serverConfig.method = m;
+  document.getElementById('method-POST').classList.toggle('active', m === 'POST');
+  document.getElementById('method-GET').classList.toggle('active', m === 'GET');
+  localStorage.setItem('server_config', JSON.stringify(serverConfig));
+}
+
+async function testServer() {
+  const url = serverConfig.url;
+  if (!url) { alert('Inserisci un URL prima'); return; }
+  try {
+    const headers = {};
+    if (serverConfig.auth) headers['Authorization'] = serverConfig.auth;
+    const res = await fetch(url, { method: 'GET', headers });
+    document.getElementById('server-response').textContent = '✅ ' + res.status + ' OK';
+    document.getElementById('server-response').classList.remove('empty');
+    document.getElementById('server-response').style.color = 'var(--success)';
+  } catch(e) {
+    document.getElementById('server-response').textContent = '❌ ' + e.message;
+    document.getElementById('server-response').classList.remove('empty');
+    document.getElementById('server-response').style.color = 'var(--danger)';
+  }
+}
+
+// ─── HISTORY ──────────────────────────────────────────────
+function addToHistory(type, value) {
+  history.unshift({ type, value, ts: new Date().toLocaleTimeString('it') });
+  if (history.length > 50) history.pop();
+  localStorage.setItem('scan_history', JSON.stringify(history));
+}
+
+function renderHistory() {
+  const el = document.getElementById('history-list');
+  if (!history.length) {
+    el.innerHTML = '<div class="empty-state">nessuna scansione ancora</div>';
+    return;
+  }
+  el.innerHTML = history.map(h => `
+    <div class="history-item">
+      <div class="hi-type">${h.type}</div>
+      <div class="hi-body">
+        <div class="hi-val">${escHtml(h.value)}</div>
+        <div class="hi-ts">${h.ts}</div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function clearHistory() {
+  history = [];
+  localStorage.removeItem('scan_history');
+  renderHistory();
+}
+
+// ─── LOG ──────────────────────────────────────────────────
+function addLog(panel, level, msg) {
+  const ts = new Date().toLocaleTimeString('it', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  const logId = panel === 'nfc' ? 'log-panel-nfc' : 'log-panel';
+  const logEl = document.getElementById(logId);
+  const div = document.createElement('div');
+  div.className = 'log-entry ' + level;
+  div.innerHTML = `<span class="ts">${ts}</span><span class="msg">${escHtml(msg)}</span>`;
+  logEl.prepend(div);
+  if (logEl.children.length > 30) logEl.lastChild.remove();
+}
+
+function clearLog() {
+  document.getElementById('log-panel').innerHTML = '';
+  document.getElementById('log-panel-nfc').innerHTML = '';
+}
+
+// ─── UTILS ────────────────────────────────────────────────
+function vibrate() {
+  if (navigator.vibrate) navigator.vibrate([30, 20, 30]);
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+</script>
+</body>
+</html>
